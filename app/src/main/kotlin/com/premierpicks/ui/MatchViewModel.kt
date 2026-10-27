@@ -19,12 +19,18 @@ data class Banner(val id: Long, val title: String, val detail: String? = null)
 data class MatchUiState(
     val match: MatchState,
     val humanSide: Side,
+    val homeName: String,
+    val awayName: String,
     val isHumanTurn: Boolean,
     val banner: Banner? = null,
-)
+) {
+    fun name(side: Side) = if (side == Side.HOME) homeName else awayName
+}
 
 class MatchViewModel : ViewModel() {
     private var match = SoloMatch(Side.HOME)
+    private var homeName = "Home"
+    private var awayName = "Away"
     private var bannerCount = 0L
     private var computerJob: Job? = null
 
@@ -50,10 +56,14 @@ class MatchViewModel : ViewModel() {
         runComputer()
     }
 
-    fun newMatch() {
+    /** Starts a fresh match; the computer moves straight away if it kicks off. */
+    fun start(humanSide: Side, homeName: String, awayName: String) {
         computerJob?.cancel()
-        match = SoloMatch(Side.HOME)
-        publish(emptyList())
+        this.homeName = homeName
+        this.awayName = awayName
+        match = SoloMatch(humanSide)
+        _ui.value = snapshot(banner = null)
+        runComputer()
     }
 
     /** Plays the computer's moves with pauses so the player can follow each one. */
@@ -81,6 +91,8 @@ class MatchViewModel : ViewModel() {
     private fun snapshot(banner: Banner?) = MatchUiState(
         match = match.state,
         humanSide = match.humanSide,
+        homeName = homeName,
+        awayName = awayName,
         isHumanTurn = match.isHumanTurn,
         banner = banner,
     )
@@ -95,7 +107,7 @@ class MatchViewModel : ViewModel() {
             is MatchEvent.Goal -> Banner(
                 id,
                 if (event.fromPenalty) "PENALTY SCORED!" else "GOAL!",
-                if (event.side == match.humanSide) "You score" else "CPU scores",
+                if (event.side == match.humanSide) "You score" else "${teamName(event.side)} score",
             )
             is MatchEvent.PenaltySaved -> Banner(id, "PENALTY SAVED", "The keeper guesses right")
             is MatchEvent.SentOff -> Banner(id, "SENT OFF!", "${who(event.side)} can now pick at most ${event.newMaxPicks}")
@@ -122,7 +134,9 @@ class MatchViewModel : ViewModel() {
         else -> 0
     }
 
-    private fun who(side: Side) = if (side == match.humanSide) "You" else "CPU"
+    private fun who(side: Side) = if (side == match.humanSide) "You" else teamName(side)
+
+    private fun teamName(side: Side) = if (side == Side.HOME) homeName else awayName
 
     private companion object {
         const val THINK_MS = 900L
