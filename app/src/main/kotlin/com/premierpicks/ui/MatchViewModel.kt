@@ -2,6 +2,7 @@ package com.premierpicks.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.premierpicks.engine.CardType
 import com.premierpicks.engine.MatchEvent
 import com.premierpicks.engine.MatchState
 import com.premierpicks.engine.Phase
@@ -114,12 +115,12 @@ class MatchViewModel : ViewModel() {
             is MatchEvent.Booked -> Banner(id, if (event.red) "RED CARD" else "YELLOW CARD", who(event.side))
             is MatchEvent.Foul -> Banner(
                 id,
-                "FOUL!",
+                "INJURY!",
                 if (event.forfeitedPicks == 0) "Turn over" else "${event.forfeitedPicks} picks go to ${who(event.side.opponent)}",
             )
             is MatchEvent.Hint -> Banner(id, "HINT!", "Goals are highlighted")
-            is MatchEvent.Substitution -> Banner(id, "Substitution")
-            is MatchEvent.Miss -> Banner(id, if (id % 2 == 0L) "Shot wide" else "Saved!")
+            is MatchEvent.Substitution -> Banner(id, "SUBSTITUTE!", "Swapped for ${describe(event.replacement)}")
+            is MatchEvent.Miss -> Banner(id, "SAVED!")
             else -> null
         }
     }
@@ -131,7 +132,20 @@ class MatchViewModel : ViewModel() {
         is MatchEvent.Foul -> 3
         is MatchEvent.Booked -> 2
         is MatchEvent.Hint -> 1
+        // Above the card it turned into, unless that card did something bigger.
+        is MatchEvent.Substitution -> 1
         else -> 0
+    }
+
+    private fun describe(type: CardType) = when (type) {
+        CardType.GOAL -> "a goal"
+        CardType.PENALTY -> "a penalty"
+        CardType.HINT -> "a hint"
+        CardType.MISS -> "a save"
+        CardType.FOUL -> "an injury"
+        CardType.YELLOW -> "a yellow card"
+        CardType.RED -> "a red card"
+        CardType.SUBSTITUTE, CardType.WHISTLE -> "another card"
     }
 
     private fun who(side: Side) = if (side == match.humanSide) "You" else teamName(side)

@@ -63,7 +63,7 @@ sealed interface MatchEvent {
     data class PenaltySaved(val side: Side) : MatchEvent
     data class Hint(val goalIndices: Set<Int>) : MatchEvent
     data class Miss(val side: Side) : MatchEvent
-    data class Substitution(val side: Side) : MatchEvent
+    data class Substitution(val side: Side, val replacement: CardType) : MatchEvent
     data class Foul(val side: Side, val forfeitedPicks: Int) : MatchEvent
     data class Booked(val side: Side, val red: Boolean) : MatchEvent
     data class SentOff(val side: Side, val newMaxPicks: Int) : MatchEvent
@@ -105,14 +105,19 @@ object MatchEngine {
 
         val active = state.turn.side
         val events = mutableListOf<MatchEvent>()
+        // A substitute is swapped for another card, which takes effect with the same pick.
+        val type = if (card.type == CardType.SUBSTITUTE) BoardFactory.substituteFor(rng) else card.type
+        if (card.type == CardType.SUBSTITUTE) events += MatchEvent.Substitution(active, type)
         var s = state.copy(
-            board = state.board.toMutableList().also { it[index] = card.copy(revealed = true) },
+            board = state.board.toMutableList().also {
+                it[index] = Card(type, revealed = true, substituted = card.type == CardType.SUBSTITUTE)
+            },
             turn = state.turn.copy(used = state.turn.used + 1),
             highlightedGoals = state.highlightedGoals - index,
         )
         val me = s.side(active)
 
-        when (card.type) {
+        when (type) {
             CardType.GOAL -> {
                 s = s.withSide(active, me.copy(goals = me.goals + 1))
                 events += MatchEvent.Goal(active, fromPenalty = false)
@@ -131,7 +136,7 @@ object MatchEngine {
                 events += MatchEvent.Hint(goals)
             }
             CardType.MISS -> events += MatchEvent.Miss(active)
-            CardType.SUBSTITUTE -> events += MatchEvent.Substitution(active)
+            CardType.SUBSTITUTE -> error("A substitute is always replaced before it takes effect")
             CardType.FOUL -> {
                 val forfeited = s.turn.remaining
                 val opp = s.side(active.opponent)
@@ -139,7 +144,7 @@ object MatchEngine {
                 events += MatchEvent.Foul(active, forfeited)
             }
             CardType.YELLOW, CardType.RED -> {
-                val red = card.type == CardType.RED
+                val red = type == CardType.RED
                 val booked = if (red) me.copy(reds = me.reds + 1) else me.copy(yellows = me.yellows + 1)
                 s = s.withSide(active, booked)
                 events += MatchEvent.Booked(active, red)
@@ -147,12 +152,13 @@ object MatchEngine {
                     events += MatchEvent.SentOff(active, booked.maxPicks)
                 }
             }
+            CardType.WHISTLE -> return endHalf(s, events)
         }
 
         if (s.unrevealed.isEmpty()) {
             return endHalf(s, events)
         }
-        if (card.type == CardType.FOUL || s.turn.remaining == 0) {
+        if (type == CardType.FOUL || s.turn.remaining == 0) {
             s = switchTurn(s, events)
         }
         return StepResult(s, events)

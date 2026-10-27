@@ -31,10 +31,11 @@ Where the functional spec left room for interpretation, the engine makes these c
 
 | Topic | Decision |
 | --- | --- |
-| Board | 18 cards per half: 2–3 goals, 1 penalty, 1 hint, 2 substitutes, 2 fouls, 2 discipline cards (each yellow, or red with 25% chance), misses fill the rest (7–8). |
+| Board | 18 cards per half, laid out 6 across and 3 down like the original: 2–3 goals, 1 penalty, 1 hint, 1 half-time/full-time whistle, 2 substitutes, 2 injuries, 2 discipline cards (each yellow, or red with 25% chance), and saves fill the rest (6–7). |
 | Kick-off | Home side chooses first in the first half, away side in the second. |
-| Half ends | When every card on the board has been flipped, even mid-turn. |
-| Foul | The foul card itself uses a pick. Unspent picks are added to the opponent's next turn on top of the budget they choose. Bonus picks are dropped at half time. |
+| Half ends | When the whistle card is flipped, even with cards still face down. |
+| Injury (foul) | The injury card itself uses a pick. Unspent picks are added to the opponent's next turn on top of the budget they choose. Bonus picks are dropped at half time. |
+| Substitute | Swapped for a random other card (never another substitute or the whistle), which takes effect with the same pick. |
 | Penalty | Scores 80% of the time. |
 | Hint | Highlights every unrevealed goal for the rest of the half (the UI can choose to flash it for 3 seconds instead). |
 | Discipline | Two yellows, or one red, is a sending-off. Each sending-off lowers that side's maximum budget by 1 for the rest of the match, never below 1. |

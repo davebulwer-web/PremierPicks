@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,7 +29,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,6 +49,7 @@ import com.premierpicks.engine.MAX_PICKS
 import com.premierpicks.engine.Phase
 import com.premierpicks.engine.Side
 import com.premierpicks.engine.SideState
+import kotlinx.coroutines.delay
 
 @Composable
 fun MatchScreen(vm: MatchViewModel, onFinished: (homeGoals: Int, awayGoals: Int) -> Unit) {
@@ -80,13 +83,17 @@ fun MatchContent(
         ) {
             Scoreboard(ui)
             TurnStatus(ui)
-            CardGrid(
-                cards = state.board,
-                highlighted = state.highlightedGoals,
-                canFlip = ui.isHumanTurn && state.phase == Phase.FLIPPING,
-                onFlip = onFlip,
-                modifier = Modifier.weight(1f),
-            )
+            // A new board gets fresh tiles, so cards don't animate from the old board's faces.
+            key(state.half) {
+                CardGrid(
+                    cards = state.board,
+                    half = state.half,
+                    highlighted = state.highlightedGoals,
+                    canFlip = ui.isHumanTurn && state.phase == Phase.FLIPPING,
+                    onFlip = onFlip,
+                    modifier = Modifier.weight(1f),
+                )
+            }
             PickSelector(
                 enabled = ui.isHumanTurn && state.phase == Phase.AWAITING_BUDGET,
                 maxPicks = me.maxPicks,
@@ -96,7 +103,13 @@ fun MatchContent(
 
         ui.banner?.let { key(it.id) { BannerOverlay(it) } }
 
-        when (state.phase) {
+        // Let the whistle card be seen before the break screen covers the board.
+        var showBreak by remember(state.phase) { mutableStateOf(false) }
+        LaunchedEffect(state.phase) {
+            delay(BREAK_DELAY_MS)
+            showBreak = true
+        }
+        if (showBreak) when (state.phase) {
             Phase.HALF_TIME -> BreakOverlay(
                 title = "Half time",
                 score = score,
@@ -168,22 +181,25 @@ private fun TurnStatus(ui: MatchUiState) {
 @Composable
 private fun CardGrid(
     cards: List<Card>,
+    half: Int,
     highlighted: Set<Int>,
     canFlip: Boolean,
     onFlip: (Int) -> Unit,
     modifier: Modifier,
 ) {
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    // Six across and three down, like the original, with portrait cards.
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically)) {
         cards.chunked(COLUMNS).forEachIndexed { row, rowCards ->
-            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 rowCards.forEachIndexed { col, card ->
                     val index = row * COLUMNS + col
                     CardTile(
                         card = card,
+                        half = half,
                         highlighted = index in highlighted,
                         enabled = canFlip && !card.revealed,
                         onClick = { onFlip(index) },
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        modifier = Modifier.weight(1f).aspectRatio(CARD_ASPECT),
                     )
                 }
             }
@@ -192,11 +208,10 @@ private fun CardGrid(
 }
 
 @Composable
-private fun CardTile(card: Card, highlighted: Boolean, enabled: Boolean, onClick: () -> Unit, modifier: Modifier) {
+private fun CardTile(card: Card, half: Int, highlighted: Boolean, enabled: Boolean, onClick: () -> Unit, modifier: Modifier) {
     val rotation by animateFloatAsState(if (card.revealed) 180f else 0f, tween(400), label = "flip")
     val showingFace = rotation > 90f
-    val face = faceOf(card.type)
-    val shape = RoundedCornerShape(10.dp)
+    val shape = RoundedCornerShape(4.dp)
 
     Box(
         modifier
@@ -205,19 +220,14 @@ private fun CardTile(card: Card, highlighted: Boolean, enabled: Boolean, onClick
                 cameraDistance = 12f * density
             }
             .clip(shape)
-            .background(if (showingFace) face.background else CardBack)
-            .then(if (highlighted && !showingFace) Modifier.border(3.dp, Gold, shape) else Modifier)
+            .border(if (highlighted && !showingFace) 3.dp else 2.dp, if (highlighted && !showingFace) Gold else Color(0xFF1A1A1A), shape)
             .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
     ) {
         if (showingFace) {
             // Counter-rotate so the face isn't mirrored.
-            Column(Modifier.graphicsLayer { rotationY = 180f }, horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(face.emoji, fontSize = 26.sp)
-                Text(face.label, color = face.text, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            }
+            CardFaceArt(card.type, half, Modifier.fillMaxSize().graphicsLayer { rotationY = 180f })
         } else {
-            Text("?", color = Color.White.copy(alpha = 0.8f), fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            CardBackArt(Modifier.fillMaxSize())
         }
     }
 }
@@ -244,16 +254,18 @@ private fun PickSelector(enabled: Boolean, maxPicks: Int, onChoose: (Int) -> Uni
 private fun BannerOverlay(banner: Banner) {
     val scale = remember { Animatable(0.6f) }
     LaunchedEffect(Unit) { scale.animateTo(1f, tween(250)) }
+    // A plain Box rather than a Surface: a Surface swallows taps, which made the cards
+    // underneath the banner ignore the player while it was showing.
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Surface(
-            color = Color.Black.copy(alpha = 0.8f),
-            shape = RoundedCornerShape(20.dp),
-            modifier = Modifier.scale(scale.value),
+        Column(
+            Modifier
+                .scale(scale.value)
+                .background(Color.Black.copy(alpha = 0.8f), RoundedCornerShape(20.dp))
+                .padding(horizontal = 32.dp, vertical = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Column(Modifier.padding(horizontal = 32.dp, vertical = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(banner.title, color = Gold, fontSize = 34.sp, fontWeight = FontWeight.Black)
-                banner.detail?.let { Text(it, color = Color.White, fontSize = 16.sp) }
-            }
+            Text(banner.title, color = Gold, fontSize = 34.sp, fontWeight = FontWeight.Black, textAlign = TextAlign.Center)
+            banner.detail?.let { Text(it, color = Color.White, fontSize = 16.sp, textAlign = TextAlign.Center) }
         }
     }
 }
@@ -276,4 +288,6 @@ private fun BreakOverlay(title: String, score: String, action: String, onAction:
     }
 }
 
-private const val COLUMNS = 3
+private const val COLUMNS = 6
+private const val CARD_ASPECT = 0.72f
+private const val BREAK_DELAY_MS = 1_200L

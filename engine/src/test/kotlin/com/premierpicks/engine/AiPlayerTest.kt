@@ -46,12 +46,12 @@ class AiPlayerTest {
     }
 
     @Test
-    fun `simulated matches always finish with both boards cleared`() {
+    fun `simulated matches always reach full time on the whistle`() {
         repeat(300) { seed ->
             val end = MatchSimulator.simulate(Random(seed))
             assertEquals(Phase.FULL_TIME, end.phase)
             assertEquals(2, end.half)
-            assertTrue(end.board.all { it.revealed })
+            assertTrue(end.board.any { it.type == CardType.WHISTLE && it.revealed })
             assertTrue(end.home.goals in 0..8 && end.away.goals in 0..8)
         }
     }

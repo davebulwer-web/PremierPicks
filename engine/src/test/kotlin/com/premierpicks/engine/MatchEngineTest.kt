@@ -149,4 +149,41 @@ class MatchEngineTest {
         )
         assertEquals(5, MatchEngine.startSecondHalf(booked, rng).home.maxPicks)
     }
+
+    @Test
+    fun `the whistle ends the first half with cards still face down`() {
+        var s = MatchEngine.chooseBudget(stateWith(CardType.MISS, CardType.FOUL, CardType.WHISTLE), 1)
+        s = MatchEngine.flip(s, 1, rng).state // home fouls; away to play
+        s = MatchEngine.chooseBudget(s.copy(home = s.home.copy(bonusPicks = 2)), 3)
+        val r = MatchEngine.flip(s, 2, rng)
+        assertEquals(Phase.HALF_TIME, r.state.phase)
+        assertTrue(MatchEvent.HalfTime in r.events)
+        assertEquals(16, r.state.unrevealed.size)
+        assertEquals(0, r.state.home.bonusPicks, "bonus picks don't survive the whistle")
+    }
+
+    @Test
+    fun `the whistle in the second half is full time`() {
+        val second = MatchEngine.startSecondHalf(MatchEngine.kickOff(rng).copy(phase = Phase.HALF_TIME), rng)
+        val whistle = second.board.indexOfFirst { it.type == CardType.WHISTLE }
+        val r = MatchEngine.flip(MatchEngine.chooseBudget(second, 4), whistle, rng)
+        assertEquals(Phase.FULL_TIME, r.state.phase)
+        assertTrue(MatchEvent.FullTime in r.events)
+    }
+
+    @Test
+    fun `a substitute is swapped for another card which takes effect`() {
+        repeat(200) { seed ->
+            val r = Random(seed)
+            val s = MatchEngine.chooseBudget(stateWith(CardType.SUBSTITUTE), 3)
+            val result = MatchEngine.flip(s, 0, r)
+            val card = result.state.board[0]
+            assertTrue(card.revealed && card.substituted)
+            assertTrue(card.type != CardType.SUBSTITUTE)
+            assertEquals(MatchEvent.Substitution(Side.HOME, card.type), result.events.first())
+            if (card.type == CardType.GOAL) assertEquals(1, result.state.home.goals)
+            if (card.type == CardType.MISS) assertEquals(0, result.state.home.goals)
+            if (card.type == CardType.FOUL) assertEquals(Side.AWAY, result.state.turn.side)
+        }
+    }
 }
