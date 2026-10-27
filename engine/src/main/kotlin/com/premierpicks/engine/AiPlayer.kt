@@ -2,55 +2,77 @@ package com.premierpicks.engine
 
 import kotlin.random.Random
 
-/** Risk-based computer opponent: cautious when level or ahead, reckless when chasing late on. */
+/**
+ * The computer manager. It remembers the cards it has seen (card help and penalty hunts)
+ * and uses them: it takes goals it knows about, avoids the whistle unless ending the half
+ * suits it, and steers clear of fouls and misses.
+ */
 object AiPlayer {
 
-    fun chooseBudget(state: MatchState, rng: Random): Int {
-        val me = state.turn.side
-        val diff = state.side(me).goals - state.side(me.opponent).goals
-        val late = state.half == 2 && state.unrevealed.size <= BoardFactory.SIZE / 2
-        val wanted = when {
-            diff >= 0 -> rng.nextInt(1, 3) // 1..2
-            late -> rng.nextInt(4, 7) // 4..6
-            else -> rng.nextInt(2, 5) // 2..4
-        }
-        return wanted.coerceIn(1, state.side(me).maxPicks)
-    }
+    /** Where the computer's card-help buzzer stops. */
+    fun previewCount(rng: Random): Int = rng.nextInt(1, MAX_PREVIEW + 1)
 
-    /** Takes any goal a hint has exposed, otherwise a random face-down card. */
     fun chooseCard(state: MatchState, rng: Random): Int {
-        val hinted = state.highlightedGoals.filter { !state.board[it].revealed }
-        return if (hinted.isNotEmpty()) hinted.first() else state.unrevealed.random(rng)
+        val me = state.turn.side
+        val ahead = state.side(me).goals > state.side(me.opponent).goals
+        val known = state.known(me)
+        val candidates = state.faceDown
+        // Lower is better. Unknown cards sit in the middle.
+        fun rank(index: Int): Int {
+            if (index !in known) return 4
+            return when (state.board[index].type) {
+                CardType.GOAL -> 0
+                CardType.WHISTLE -> if (ahead) 1 else 9
+                CardType.YELLOW -> 2
+                CardType.PENALTY -> 3
+                CardType.SUBSTITUTE -> 5
+                CardType.MISS -> 6
+                CardType.FOUL -> 8
+            }
+        }
+        val best = candidates.minOf { rank(it) }
+        return candidates.filter { rank(it) == best }.random(rng)
     }
 
-    /** Takes a single action for the side whose turn it is: choose a budget or flip one card. */
+    /** One move during the computer's own penalty: look at a card, or give up when time runs out. */
+    fun penaltyStep(state: MatchState, rng: Random): StepResult {
+        val me = state.turn.side
+        val unseen = state.faceDown - state.penaltyPeeks.toSet()
+        val knownGoal = unseen.firstOrNull { it in state.known(me) && state.board[it].type == CardType.GOAL }
+        val outOfTime = state.penaltyPeeks.size >= MAX_PENALTY_PEEKS ||
+            (state.penaltyPeeks.isNotEmpty() && rng.nextDouble() < GIVE_UP_CHANCE)
+        return when {
+            knownGoal != null -> MatchEngine.penaltyPeek(state, knownGoal)
+            outOfTime || unseen.isEmpty() -> MatchEngine.penaltyMissed(state)
+            else -> MatchEngine.penaltyPeek(state, (unseen - state.known(me)).ifEmpty { unseen }.random(rng))
+        }
+    }
+
+    /** Takes a single action for the side whose turn it is. */
     fun step(state: MatchState, rng: Random): StepResult = when (state.phase) {
-        Phase.AWAITING_BUDGET -> StepResult(MatchEngine.chooseBudget(state, chooseBudget(state, rng)), emptyList())
-        Phase.FLIPPING -> MatchEngine.flip(state, chooseCard(state, rng), rng)
+        Phase.PICKING -> MatchEngine.flip(state, chooseCard(state, rng), rng)
+        Phase.PENALTY -> penaltyStep(state, rng)
         else -> error("No move to make in phase ${state.phase}")
     }
 
-    /** Plays whole turns until the match needs input from someone other than [side]. */
-    fun playTurn(state: MatchState, side: Side, rng: Random): StepResult {
-        var s = state
-        val events = mutableListOf<MatchEvent>()
-        while (s.turn.side == side && s.phase in setOf(Phase.AWAITING_BUDGET, Phase.FLIPPING)) {
-            val step = step(s, rng)
-            s = step.state
-            events += step.events
-        }
-        return StepResult(s, events)
-    }
+    private const val MAX_PENALTY_PEEKS = 5
+    private const val GIVE_UP_CHANCE = 0.3
 }
 
 object MatchSimulator {
-    /** Plays a full AI-vs-AI match, used for the rest of the league's fixtures. */
-    fun simulate(rng: Random): MatchState {
+    /** Plays a full computer-vs-computer match, used for the rest of the league's fixtures. */
+    fun simulate(rng: Random, cardHelp: Boolean = true): MatchState {
         var s = MatchEngine.kickOff(rng)
         while (s.phase != Phase.FULL_TIME) {
             s = when (s.phase) {
+                Phase.PREVIEW -> {
+                    for (side in Side.entries) {
+                        s = MatchEngine.preview(s, side, if (cardHelp) AiPlayer.previewCount(rng) else 0, rng).first
+                    }
+                    MatchEngine.beginPlay(s)
+                }
                 Phase.HALF_TIME -> MatchEngine.startSecondHalf(s, rng)
-                else -> AiPlayer.playTurn(s, s.turn.side, rng).state
+                else -> AiPlayer.step(s, rng).state
             }
         }
         return s

@@ -8,18 +8,18 @@ class LeagueTest {
     private val fixtures = FixtureGenerator.doubleRoundRobin(DEFAULT_TEAMS)
 
     @Test
-    fun `21 teams give 42 rounds of 10 matches`() {
+    fun `22 teams give 42 rounds of 11 matches`() {
         assertEquals(LEAGUE_SIZE, DEFAULT_TEAMS.size)
         assertEquals(42, fixtures.size)
-        assertTrue(fixtures.all { it.size == 10 })
+        assertTrue(fixtures.all { it.size == 11 })
     }
 
     @Test
-    fun `every team plays 40 games, 20 home and 20 away`() {
+    fun `every team plays 42 games, 21 home and 21 away`() {
         val all = fixtures.flatten()
         for (team in DEFAULT_TEAMS) {
-            assertEquals(20, all.count { it.home == team }, "$team home")
-            assertEquals(20, all.count { it.away == team }, "$team away")
+            assertEquals(21, all.count { it.home == team }, "$team home")
+            assertEquals(21, all.count { it.away == team }, "$team away")
         }
     }
 
@@ -27,7 +27,7 @@ class LeagueTest {
     fun `every pairing happens once each way`() {
         val pairs = fixtures.flatten().map { it.home to it.away }
         assertEquals(pairs.size, pairs.toSet().size)
-        assertEquals(21 * 20, pairs.size)
+        assertEquals(22 * 21, pairs.size)
     }
 
     @Test
@@ -49,5 +49,20 @@ class LeagueTest {
         val a = table.standings().first()
         assertEquals(3, a.points)
         assertEquals(3, a.goalDifference)
+    }
+
+    @Test
+    fun `points for a win, draw and defeat can be changed`() {
+        val table = LeagueTable(listOf("A", "B", "C"), PointsRules(win = 2, draw = 1, loss = 0))
+        table.record(Fixture(1, "A", "B"), 1, 0)
+        table.record(Fixture(2, "B", "C"), 1, 1)
+        assertEquals(listOf(2, 1, 1), table.standings().map { it.points })
+    }
+
+    @Test
+    fun `odd-sized leagues give each team a rest`() {
+        val five = FixtureGenerator.doubleRoundRobin(listOf("A", "B", "C", "D", "E"))
+        assertEquals(10, five.size)
+        assertTrue(five.all { it.size == 2 })
     }
 }

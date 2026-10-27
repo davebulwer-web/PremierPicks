@@ -6,7 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 
-/** Top-level navigation: pick a team, then move between the season hub and matches. */
+/** Top-level navigation: set up a season, then move between the season hub and matches. */
 @Composable
 fun PremierPicksApp(
     seasonVm: SeasonViewModel = viewModel(),
@@ -17,7 +17,12 @@ fun PremierPicksApp(
     val playing = ui.playing
 
     when {
-        season == null -> TeamPickerScreen(onPick = seasonVm::newSeason)
+        season == null -> NewSeasonScreen(
+            teamNames = ui.teamNames,
+            onRename = seasonVm::renameTeam,
+            onResetNames = seasonVm::resetTeamNames,
+            onStart = seasonVm::newSeason,
+        )
         playing != null -> {
             // A match can't be abandoned half way: back does nothing.
             BackHandler {}
@@ -28,7 +33,7 @@ fun PremierPicksApp(
             version = ui.version,
             onPlay = {
                 seasonVm.playRound()?.let { fixture ->
-                    matchVm.start(season.playerSide(fixture), fixture.home, fixture.away)
+                    matchVm.start(season.playerSide(fixture), fixture.home, fixture.away, season.settings.cardHelp)
                 }
             },
             onNewSeason = seasonVm::abandonSeason,

@@ -2,8 +2,11 @@ package com.premierpicks.engine
 
 import kotlin.random.Random
 
-const val MAX_PICKS = 6
-const val PENALTY_SUCCESS_CHANCE = 0.8
+/** Most cards the card-help buzzer can let a side preview before a half. */
+const val MAX_PREVIEW = 6
+
+/** Picks the opponent gets after a foul. */
+const val FOUL_PICKS = 2
 
 enum class Side {
     HOME,
@@ -12,33 +15,19 @@ enum class Side {
     val opponent: Side get() = if (this == HOME) AWAY else HOME
 }
 
-/** One team's state within a single match. Discipline persists across both halves. */
-data class SideState(
-    val goals: Int = 0,
-    val yellows: Int = 0,
-    val reds: Int = 0,
-    /** Picks forfeited to this side by an opponent's foul, added to its next turn. */
-    val bonusPicks: Int = 0,
-) {
-    /** Two yellows count as one sending-off, as does each red. */
-    val sendingsOff: Int get() = yellows / 2 + reds
+data class SideState(val goals: Int = 0, val yellows: Int = 0)
 
-    /** Largest budget this side may choose; each sending-off costs one, never below 1. */
-    val maxPicks: Int get() = (MAX_PICKS - sendingsOff).coerceAtLeast(1)
+data class Turn(val side: Side, val picksLeft: Int = 1)
+
+enum class Phase {
+    /** Before a half: each side may preview some cards ("card help"). */
+    PREVIEW,
+    PICKING,
+    /** The side on turn is hunting for a goal card against the clock. */
+    PENALTY,
+    HALF_TIME,
+    FULL_TIME,
 }
-
-data class Turn(
-    val side: Side,
-    /** Budget chosen by the player, or null before they confirm one. */
-    val requested: Int? = null,
-    val bonus: Int = 0,
-    val used: Int = 0,
-) {
-    val total: Int get() = (requested ?: 0) + bonus
-    val remaining: Int get() = total - used
-}
-
-enum class Phase { AWAITING_BUDGET, FLIPPING, HALF_TIME, FULL_TIME }
 
 data class MatchState(
     val half: Int,
@@ -47,27 +36,34 @@ data class MatchState(
     val away: SideState,
     val turn: Turn,
     val phase: Phase,
-    /** Goal positions exposed by a hint card this half; the UI highlights them. */
-    val highlightedGoals: Set<Int> = emptySet(),
+    /** Face-down cards each side has seen this half, from card help or penalty hunts. */
+    val knownHome: Set<Int> = emptySet(),
+    val knownAway: Set<Int> = emptySet(),
+    /** Cards turned over so far in the current penalty hunt. */
+    val penaltyPeeks: List<Int> = emptyList(),
 ) {
     fun side(side: Side): SideState = if (side == Side.HOME) home else away
 
     fun withSide(side: Side, state: SideState): MatchState =
         if (side == Side.HOME) copy(home = state) else copy(away = state)
 
-    val unrevealed: List<Int> get() = board.indices.filter { !board[it].revealed }
+    fun known(side: Side): Set<Int> = if (side == Side.HOME) knownHome else knownAway
+
+    fun withKnown(side: Side, known: Set<Int>): MatchState =
+        if (side == Side.HOME) copy(knownHome = known) else copy(knownAway = known)
+
+    val faceDown: List<Int> get() = board.indices.filter { !board[it].revealed }
 }
 
 sealed interface MatchEvent {
     data class Goal(val side: Side, val fromPenalty: Boolean) : MatchEvent
-    data class PenaltySaved(val side: Side) : MatchEvent
-    data class Hint(val goalIndices: Set<Int>) : MatchEvent
+    data class PenaltyAwarded(val side: Side) : MatchEvent
+    data class PenaltyMissed(val side: Side) : MatchEvent
     data class Miss(val side: Side) : MatchEvent
-    data class Substitution(val side: Side) : MatchEvent
-    data class Foul(val side: Side, val forfeitedPicks: Int) : MatchEvent
-    data class Booked(val side: Side, val red: Boolean) : MatchEvent
-    data class SentOff(val side: Side, val newMaxPicks: Int) : MatchEvent
-    data class TurnChanged(val side: Side, val bonusPicks: Int) : MatchEvent
+    data class FreeKick(val side: Side) : MatchEvent
+    data class Foul(val side: Side) : MatchEvent
+    data class Substitution(val side: Side, val replacement: CardType) : MatchEvent
+    data class TurnChanged(val side: Side, val picks: Int) : MatchEvent
     data object HalfTime : MatchEvent
     data object FullTime : MatchEvent
 }
@@ -77,6 +73,9 @@ data class StepResult(val state: MatchState, val events: List<MatchEvent>)
 /**
  * Pure match rules. Every function returns a new state; randomness comes only from the
  * [Random] passed in, so a seeded match is fully reproducible.
+ *
+ * A half: both sides may preview some cards, then they take turns flipping one card each
+ * until someone flips the whistle.
  */
 object MatchEngine {
 
@@ -86,76 +85,94 @@ object MatchEngine {
         home = SideState(),
         away = SideState(),
         turn = Turn(Side.HOME),
-        phase = Phase.AWAITING_BUDGET,
+        phase = Phase.PREVIEW,
     )
 
-    /** Confirms the active side's pick budget; cards cannot be flipped until this is done. */
-    fun chooseBudget(state: MatchState, picks: Int): MatchState {
-        check(state.phase == Phase.AWAITING_BUDGET) { "Not awaiting a budget (phase ${state.phase})" }
-        val max = state.side(state.turn.side).maxPicks
-        require(picks in 1..max) { "Budget must be 1..$max, was $picks" }
-        return state.copy(turn = state.turn.copy(requested = picks), phase = Phase.FLIPPING)
+    /**
+     * Card help: shows [side] up to [count] face-down cards it hasn't seen yet. Returns the
+     * new state and the cards shown.
+     */
+    fun preview(state: MatchState, side: Side, count: Int, rng: Random): Pair<MatchState, List<Int>> {
+        check(state.phase == Phase.PREVIEW) { "Not before a half (phase ${state.phase})" }
+        require(count in 0..MAX_PREVIEW) { "Preview must be 0..$MAX_PREVIEW, was $count" }
+        val shown = (state.faceDown - state.known(side)).shuffled(rng).take(count)
+        return state.withKnown(side, state.known(side) + shown) to shown
+    }
+
+    fun beginPlay(state: MatchState): MatchState {
+        check(state.phase == Phase.PREVIEW) { "Not before a half (phase ${state.phase})" }
+        return state.copy(phase = Phase.PICKING)
     }
 
     fun flip(state: MatchState, index: Int, rng: Random): StepResult {
-        check(state.phase == Phase.FLIPPING) { "Cannot flip in phase ${state.phase}" }
+        check(state.phase == Phase.PICKING) { "Cannot flip in phase ${state.phase}" }
         require(index in state.board.indices) { "No card at $index" }
         val card = state.board[index]
         if (card.revealed) return StepResult(state, emptyList())
 
         val active = state.turn.side
         val events = mutableListOf<MatchEvent>()
+        val substituted = card.type == CardType.SUBSTITUTE
+        val type = if (substituted) BoardFactory.substituteFor(rng) else card.type
+        if (substituted) events += MatchEvent.Substitution(active, type)
+
         var s = state.copy(
-            board = state.board.toMutableList().also { it[index] = card.copy(revealed = true) },
-            turn = state.turn.copy(used = state.turn.used + 1),
-            highlightedGoals = state.highlightedGoals - index,
+            board = state.board.toMutableList().also { it[index] = Card(type, revealed = true, substituted = substituted) },
+            turn = state.turn.copy(picksLeft = state.turn.picksLeft - 1),
         )
         val me = s.side(active)
 
-        when (card.type) {
+        when (type) {
             CardType.GOAL -> {
                 s = s.withSide(active, me.copy(goals = me.goals + 1))
                 events += MatchEvent.Goal(active, fromPenalty = false)
             }
-            CardType.PENALTY -> {
-                if (rng.nextDouble() < PENALTY_SUCCESS_CHANCE) {
-                    s = s.withSide(active, me.copy(goals = me.goals + 1))
-                    events += MatchEvent.Goal(active, fromPenalty = true)
-                } else {
-                    events += MatchEvent.PenaltySaved(active)
-                }
-            }
-            CardType.HINT -> {
-                val goals = s.unrevealed.filter { s.board[it].type == CardType.GOAL }.toSet()
-                s = s.copy(highlightedGoals = goals)
-                events += MatchEvent.Hint(goals)
-            }
             CardType.MISS -> events += MatchEvent.Miss(active)
-            CardType.SUBSTITUTE -> events += MatchEvent.Substitution(active)
+            CardType.YELLOW -> {
+                s = s.withSide(active, me.copy(yellows = me.yellows + 1))
+                    .copy(turn = s.turn.copy(picksLeft = s.turn.picksLeft + 1))
+                events += MatchEvent.FreeKick(active)
+            }
             CardType.FOUL -> {
-                val forfeited = s.turn.remaining
-                val opp = s.side(active.opponent)
-                s = s.withSide(active.opponent, opp.copy(bonusPicks = opp.bonusPicks + forfeited))
-                events += MatchEvent.Foul(active, forfeited)
+                events += MatchEvent.Foul(active)
+                return StepResult(switchTurn(s, FOUL_PICKS, events), events)
             }
-            CardType.YELLOW, CardType.RED -> {
-                val red = card.type == CardType.RED
-                val booked = if (red) me.copy(reds = me.reds + 1) else me.copy(yellows = me.yellows + 1)
-                s = s.withSide(active, booked)
-                events += MatchEvent.Booked(active, red)
-                if (booked.sendingsOff > me.sendingsOff) {
-                    events += MatchEvent.SentOff(active, booked.maxPicks)
-                }
+            CardType.PENALTY -> {
+                events += MatchEvent.PenaltyAwarded(active)
+                return StepResult(s.copy(phase = Phase.PENALTY, penaltyPeeks = emptyList()), events)
             }
+            CardType.WHISTLE -> return endHalf(s, events)
+            CardType.SUBSTITUTE -> error("A substitute is always replaced before it takes effect")
         }
+        return StepResult(afterPick(s, events), events)
+    }
 
-        if (s.unrevealed.isEmpty()) {
-            return endHalf(s, events)
+    /** During a penalty: turns over a face-down card. Finding a goal scores the penalty. */
+    fun penaltyPeek(state: MatchState, index: Int): StepResult {
+        check(state.phase == Phase.PENALTY) { "No penalty being taken (phase ${state.phase})" }
+        require(index in state.board.indices && !state.board[index].revealed) { "Card $index isn't face down" }
+        if (index in state.penaltyPeeks) return StepResult(state, emptyList())
+
+        val taker = state.turn.side
+        val card = state.board[index]
+        if (card.type == CardType.GOAL) {
+            val me = state.side(taker)
+            val scored = state.withSide(taker, me.copy(goals = me.goals + 1)).copy(
+                board = state.board.toMutableList().also { it[index] = card.copy(revealed = true) },
+            )
+            val events = mutableListOf<MatchEvent>(MatchEvent.Goal(taker, fromPenalty = true))
+            return StepResult(finishPenalty(scored, events), events)
         }
-        if (card.type == CardType.FOUL || s.turn.remaining == 0) {
-            s = switchTurn(s, events)
-        }
-        return StepResult(s, events)
+        val peeked = state.copy(penaltyPeeks = state.penaltyPeeks + index)
+            .withKnown(taker, state.known(taker) + index)
+        return StepResult(peeked, emptyList())
+    }
+
+    /** Time's up on a penalty without finding a goal. */
+    fun penaltyMissed(state: MatchState): StepResult {
+        check(state.phase == Phase.PENALTY) { "No penalty being taken (phase ${state.phase})" }
+        val events = mutableListOf<MatchEvent>(MatchEvent.PenaltyMissed(state.turn.side))
+        return StepResult(finishPenalty(state, events), events)
     }
 
     /** Deals the second-half board. The away side kicks off the second half. */
@@ -165,32 +182,27 @@ object MatchEngine {
             half = 2,
             board = BoardFactory.newBoard(rng),
             turn = Turn(Side.AWAY),
-            phase = Phase.AWAITING_BUDGET,
-            highlightedGoals = emptySet(),
+            phase = Phase.PREVIEW,
+            knownHome = emptySet(),
+            knownAway = emptySet(),
         )
     }
 
-    private fun switchTurn(state: MatchState, events: MutableList<MatchEvent>): MatchState {
+    private fun finishPenalty(state: MatchState, events: MutableList<MatchEvent>): MatchState =
+        afterPick(state.copy(phase = Phase.PICKING, penaltyPeeks = emptyList()), events)
+
+    private fun afterPick(state: MatchState, events: MutableList<MatchEvent>): MatchState =
+        if (state.turn.picksLeft > 0) state else switchTurn(state, 1, events)
+
+    private fun switchTurn(state: MatchState, picks: Int, events: MutableList<MatchEvent>): MatchState {
         val next = state.turn.side.opponent
-        val nextState = state.side(next)
-        events += MatchEvent.TurnChanged(next, nextState.bonusPicks)
-        return state
-            .withSide(next, nextState.copy(bonusPicks = 0))
-            .copy(turn = Turn(next, bonus = nextState.bonusPicks), phase = Phase.AWAITING_BUDGET)
+        events += MatchEvent.TurnChanged(next, picks)
+        return state.copy(turn = Turn(next, picks), phase = Phase.PICKING)
     }
 
-    /** Bonus picks do not survive the end of a half: the new board starts level. */
     private fun endHalf(state: MatchState, events: MutableList<MatchEvent>): StepResult {
-        val cleared = state.copy(
-            home = state.home.copy(bonusPicks = 0),
-            away = state.away.copy(bonusPicks = 0),
-        )
-        return if (state.half == 1) {
-            events += MatchEvent.HalfTime
-            StepResult(cleared.copy(phase = Phase.HALF_TIME), events)
-        } else {
-            events += MatchEvent.FullTime
-            StepResult(cleared.copy(phase = Phase.FULL_TIME), events)
-        }
+        val over = if (state.half == 1) Phase.HALF_TIME else Phase.FULL_TIME
+        events += if (state.half == 1) MatchEvent.HalfTime else MatchEvent.FullTime
+        return StepResult(state.copy(phase = over, penaltyPeeks = emptyList()), events)
     }
 }

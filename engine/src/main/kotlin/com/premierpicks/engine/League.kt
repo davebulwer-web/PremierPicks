@@ -1,6 +1,10 @@
 package com.premierpicks.engine
 
-const val LEAGUE_SIZE = 21
+/** The 1992-93 Premier League had 22 clubs, as did the original game. */
+const val LEAGUE_SIZE = 22
+
+/** Points awarded per result; the original let you change these before a season. */
+data class PointsRules(val win: Int = 3, val draw: Int = 1, val loss: Int = 0)
 
 data class Fixture(val round: Int, val home: String, val away: String)
 
@@ -12,25 +16,30 @@ data class TableRow(
     val lost: Int = 0,
     val goalsFor: Int = 0,
     val goalsAgainst: Int = 0,
+    val points: Int = 0,
 ) {
-    val points: Int get() = won * 3 + drawn
     val goalDifference: Int get() = goalsFor - goalsAgainst
 
-    fun record(scored: Int, conceded: Int): TableRow = copy(
+    fun record(scored: Int, conceded: Int, rules: PointsRules): TableRow = copy(
         played = played + 1,
         won = won + if (scored > conceded) 1 else 0,
         drawn = drawn + if (scored == conceded) 1 else 0,
         lost = lost + if (scored < conceded) 1 else 0,
         goalsFor = goalsFor + scored,
         goalsAgainst = goalsAgainst + conceded,
+        points = points + when {
+            scored > conceded -> rules.win
+            scored == conceded -> rules.draw
+            else -> rules.loss
+        },
     )
 }
 
 object FixtureGenerator {
     /**
-     * Double round robin by the circle method. With an odd number of teams one team rests
-     * each round, so 21 teams give 42 rounds in which every team plays 40 matches,
-     * 20 at home and 20 away. The second half of the season mirrors the first.
+     * Double round robin by the circle method: 22 teams give 42 rounds, every team at home
+     * and away to each other. With an odd number of teams one team rests each round.
+     * The second half of the season mirrors the first.
      */
     fun doubleRoundRobin(teams: List<String>): List<List<Fixture>> {
         require(teams.size >= 2) { "Need at least two teams" }
@@ -60,12 +69,12 @@ object FixtureGenerator {
     }
 }
 
-class LeagueTable(teams: List<String>) {
+class LeagueTable(teams: List<String>, private val rules: PointsRules = PointsRules()) {
     private val rows = teams.associateWith { TableRow(it) }.toMutableMap()
 
     fun record(fixture: Fixture, homeGoals: Int, awayGoals: Int) {
-        rows[fixture.home] = rows.getValue(fixture.home).record(homeGoals, awayGoals)
-        rows[fixture.away] = rows.getValue(fixture.away).record(awayGoals, homeGoals)
+        rows[fixture.home] = rows.getValue(fixture.home).record(homeGoals, awayGoals, rules)
+        rows[fixture.away] = rows.getValue(fixture.away).record(awayGoals, homeGoals, rules)
     }
 
     /** Ordered by points, then goal difference, then goals scored, then name. */
@@ -77,11 +86,14 @@ class LeagueTable(teams: List<String>) {
     )
 }
 
-/** Placeholder club names; fictional so the shipped game avoids real club trademarks. */
+/**
+ * Default club names; fictional so the shipped game avoids real club trademarks. Like the
+ * original, players can rename them.
+ */
 val DEFAULT_TEAMS = listOf(
     "Ashford Rovers", "Bramley City", "Castleton Albion", "Dunmore Athletic", "Eastbridge United",
     "Fairhaven Town", "Glenmouth Wanderers", "Harrowgate Forest", "Ironbridge County", "Kingsmere Villa",
     "Lowther Park", "Marshfield Rangers", "Northcote Orient", "Oakhurst Hotspur", "Portwell Argyle",
     "Queensgate Wednesday", "Redcliffe Palace", "Southmoor Borough", "Thornbury Dynamo", "Westford Athletic",
-    "Yarrow Vale",
+    "Yarrow Vale", "Zetland Rovers",
 )

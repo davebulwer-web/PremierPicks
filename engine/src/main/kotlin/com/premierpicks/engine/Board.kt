@@ -3,41 +3,57 @@ package com.premierpicks.engine
 import kotlin.random.Random
 
 enum class CardType {
+    /** The big ball in front of the net. */
     GOAL,
+    /** Ball on the spot: the taker gets a few seconds to hunt for a goal card. */
     PENALTY,
-    HINT,
+    /** Shot saved or wide. */
     MISS,
-    SUBSTITUTE,
-    FOUL,
+    /** Yellow card, i.e. a free kick: the same side picks again. */
     YELLOW,
-    RED,
+    /** The lying-down player: the opponent takes over with two picks. */
+    FOUL,
+    /** Swapped for another card, which then takes effect. */
+    SUBSTITUTE,
+    /** Half-time / full-time whistle: flipping it ends the half there and then. */
+    WHISTLE,
 }
 
-data class Card(val type: CardType, val revealed: Boolean = false)
+/** [substituted] marks a card that was a substitute until it was flipped. */
+data class Card(val type: CardType, val revealed: Boolean = false, val substituted: Boolean = false)
 
 object BoardFactory {
     const val SIZE = 18
 
-    /** Chance that each of the two discipline cards is a straight red rather than a yellow. */
-    const val RED_CARD_CHANCE = 0.25
-
     /**
-     * Builds a freshly shuffled 18-card board for one half.
-     *
-     * Fixed cards: 1 penalty, 1 hint, 2 substitutes, 2 fouls, 2 discipline (yellow or red).
-     * That leaves 10 slots for goals (2 or 3) and misses (the rest, 7 or 8).
+     * Relative frequency of each card on the board, besides the single whistle. The original
+     * mixed its boards differently every half; these weights give roughly the scorelines
+     * its results screens show (most teams scoring 1 to 4).
      */
+    private val weights = mapOf(
+        CardType.GOAL to 10,
+        CardType.MISS to 10,
+        CardType.PENALTY to 6,
+        CardType.YELLOW to 4,
+        CardType.FOUL to 3,
+        CardType.SUBSTITUTE to 3,
+    )
+
+    /** A freshly shuffled board for one half: one whistle and 17 cards drawn from [weights]. */
     fun newBoard(rng: Random): List<Card> {
-        val goals = if (rng.nextBoolean()) 2 else 3
-        val types = buildList {
-            repeat(goals) { add(CardType.GOAL) }
-            add(CardType.PENALTY)
-            add(CardType.HINT)
-            repeat(2) { add(CardType.SUBSTITUTE) }
-            repeat(2) { add(CardType.FOUL) }
-            repeat(2) { add(if (rng.nextDouble() < RED_CARD_CHANCE) CardType.RED else CardType.YELLOW) }
-            repeat(SIZE - size) { add(CardType.MISS) }
-        }
+        val types = List(SIZE - 1) { draw(rng, weights) } + CardType.WHISTLE
         return types.shuffled(rng).map { Card(it) }
+    }
+
+    /** What a substitute turns into: any card except another substitute or the whistle. */
+    fun substituteFor(rng: Random): CardType = draw(rng, weights - CardType.SUBSTITUTE)
+
+    private fun draw(rng: Random, pool: Map<CardType, Int>): CardType {
+        var roll = rng.nextInt(pool.values.sum())
+        for ((type, weight) in pool) {
+            if (roll < weight) return type
+            roll -= weight
+        }
+        error("unreachable")
     }
 }

@@ -21,7 +21,7 @@ class SeasonTest {
     }
 
     @Test
-    fun `a full season plays 42 rounds and every team plays 40 games`() {
+    fun `a full season plays 42 rounds and every team plays 42 games`() {
         val season = Season.new(player)
         val rng = Random(5)
         var rests = 0
@@ -30,11 +30,11 @@ class SeasonTest {
             season.playRound(rng)
         }
         assertEquals(42, season.roundsPlayed)
-        assertEquals(2, rests)
+        assertEquals(0, rests)
         assertNull(season.currentRound)
-        assertTrue(season.table().all { it.played == 40 })
+        assertTrue(season.table().all { it.played == 42 })
         val me = season.table().first { it.team == player }
-        assertEquals(40, me.won)
+        assertEquals(42, me.won)
         assertEquals(1, season.playerPosition())
     }
 
@@ -52,13 +52,32 @@ class SeasonTest {
 
     @Test
     fun `player score is required exactly when they have a match`() {
-        val season = Season.new(player)
         val rng = Random(2)
-        if (season.playerFixture != null) {
-            assertFailsWith<IllegalArgumentException> { season.completeRound(null, null, rng) }
-        } else {
-            assertFailsWith<IllegalArgumentException> { season.completeRound(1, 0, rng) }
-        }
+        assertFailsWith<IllegalArgumentException> { Season.new(player).completeRound(null, null, rng) }
+        // An odd-sized league gives the player a rest round.
+        val five = Season.new("A", listOf("A", "B", "C", "D", "E"))
+        while (five.playerFixture != null) five.completeRound(1, 0, rng)
+        assertFailsWith<IllegalArgumentException> { five.completeRound(1, 0, rng) }
+    }
+
+    @Test
+    fun `a short season with custom points`() {
+        val settings = SeasonSettings(rounds = 21, points = PointsRules(2, 1, 0), cardHelp = false)
+        val season = Season.new(player, settings = settings)
+        val rng = Random(4)
+        while (!season.isFinished) season.playRound(rng)
+        assertEquals(21, season.roundsPlayed)
+        assertEquals(42, season.table().first { it.team == player }.points)
+        val loaded = Season.decode(season.encode())
+        assertEquals(settings, loaded.settings)
+    }
+
+    @Test
+    fun `loads a save from before season settings existed`() {
+        val old = "premier-picks-season-v1\nplayer\tA\nteams\tA\tB\tC\tD\n"
+        val season = Season.decode(old)
+        assertEquals(6, season.totalRounds)
+        assertEquals(SeasonSettings(rounds = 6), season.settings)
     }
 
     @Test
