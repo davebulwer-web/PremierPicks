@@ -23,18 +23,21 @@ object AiPlayer {
         return if (hinted.isNotEmpty()) hinted.first() else state.unrevealed.random(rng)
     }
 
+    /** Takes a single action for the side whose turn it is: choose a budget or flip one card. */
+    fun step(state: MatchState, rng: Random): StepResult = when (state.phase) {
+        Phase.AWAITING_BUDGET -> StepResult(MatchEngine.chooseBudget(state, chooseBudget(state, rng)), emptyList())
+        Phase.FLIPPING -> MatchEngine.flip(state, chooseCard(state, rng), rng)
+        else -> error("No move to make in phase ${state.phase}")
+    }
+
     /** Plays whole turns until the match needs input from someone other than [side]. */
     fun playTurn(state: MatchState, side: Side, rng: Random): StepResult {
         var s = state
         val events = mutableListOf<MatchEvent>()
         while (s.turn.side == side && s.phase in setOf(Phase.AWAITING_BUDGET, Phase.FLIPPING)) {
-            if (s.phase == Phase.AWAITING_BUDGET) {
-                s = MatchEngine.chooseBudget(s, chooseBudget(s, rng))
-            } else {
-                val step = MatchEngine.flip(s, chooseCard(s, rng), rng)
-                s = step.state
-                events += step.events
-            }
+            val step = step(s, rng)
+            s = step.state
+            events += step.events
         }
         return StepResult(s, events)
     }

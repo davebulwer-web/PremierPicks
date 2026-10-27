@@ -1,18 +1,21 @@
 pluginManagement {
     repositories {
-        gradlePluginPortal()
+        google()
         mavenCentral()
+        gradlePluginPortal()
     }
 }
 
 dependencyResolutionManagement {
     repositories {
+        google()
         mavenCentral()
     }
 }
 
 rootProject.name = "premier-picks"
 
-// Pure-Kotlin game rules, testable on the JVM with no Android SDK.
-include(":engine")
-// The Jetpack Compose app module (":app") is added in milestone 2.
+// The game rules are a standalone Kotlin/JVM build, so they can be tested with
+// `./gradlew -p engine test` on machines without the Android SDK.
+includeBuild("engine")
+include(":app")
