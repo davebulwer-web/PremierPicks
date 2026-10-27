@@ -34,32 +34,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.premierpicks.engine.DEFAULT_TEAMS
 import com.premierpicks.engine.Season
 import com.premierpicks.engine.TableRow
-
-@Composable
-fun TeamPickerScreen(onPick: (String) -> Unit) {
-    Column(
-        Modifier.fillMaxSize().background(Pitch).safeDrawingPadding().padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text("Premier Picks", color = Gold, fontSize = 34.sp, fontWeight = FontWeight.Black)
-        Text("Choose your team", color = Color.White, fontSize = 18.sp)
-        Spacer(Modifier.height(16.dp))
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            itemsIndexed(DEFAULT_TEAMS) { _, team ->
-                Surface(
-                    color = PitchLight,
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth().clickable { onPick(team) },
-                ) {
-                    Text(team, color = Color.White, fontSize = 18.sp, modifier = Modifier.padding(16.dp))
-                }
-            }
-        }
-    }
-}
 
 @Composable
 fun SeasonScreen(season: Season, version: Int, onPlay: () -> Unit, onNewSeason: () -> Unit) {
@@ -79,8 +55,7 @@ fun SeasonScreen(season: Season, version: Int, onPlay: () -> Unit, onNewSeason: 
         )
 
         NextUp(season, position, onPlay, onNewSeason = { confirmNew = true })
-        LastResult(season)
-        LeagueTableView(table, season.playerTeam, Modifier.weight(1f))
+        LeagueTableView(table, season, Modifier.weight(1f))
 
         if (!season.isFinished) {
             TextButton(onClick = { confirmNew = true }, modifier = Modifier.align(Alignment.CenterHorizontally)) {
@@ -139,22 +114,19 @@ private fun NextUp(season: Season, position: Int, onPlay: () -> Unit, onNewSeaso
 }
 
 @Composable
-private fun LastResult(season: Season) {
-    if (season.roundsPlayed == 0) return
-    val mine = season.lastRoundResults.firstOrNull { season.playerTeam in setOf(it.fixture.home, it.fixture.away) }
-    val text = if (mine == null) {
-        "Last round: your team rested"
-    } else {
-        "Last result: ${mine.fixture.home} ${mine.homeGoals} – ${mine.awayGoals} ${mine.fixture.away}"
-    }
-    Text(text, color = Color.White.copy(alpha = 0.8f), fontSize = 14.sp)
-}
-
-@Composable
-private fun LeagueTableView(rows: List<TableRow>, playerTeam: String, modifier: Modifier) {
+private fun LeagueTableView(rows: List<TableRow>, season: Season, modifier: Modifier) {
+    val results = season.lastRoundResults
     Surface(color = PitchLight, shape = RoundedCornerShape(16.dp), modifier = modifier.fillMaxWidth()) {
         LazyColumn(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            item { TableLine("", "Team", "P", "W", "D", "L", "GD", "Pts", header = true, highlight = false) }
+            if (results.isNotEmpty()) {
+                item { SectionTitle("Round ${season.roundsPlayed} results") }
+                itemsIndexed(results) { _, r ->
+                    val mine = season.playerTeam == r.fixture.home || season.playerTeam == r.fixture.away
+                    ResultLine(r.fixture.home, r.homeGoals, r.awayGoals, r.fixture.away, mine)
+                }
+                item { SectionTitle("Table") }
+            }
+            item { TableLine("", "Team", "P", "W", "D", "L", "F", "A", "Pts", header = true, highlight = false) }
             itemsIndexed(rows) { i, row ->
                 TableLine(
                     "${i + 1}",
@@ -163,13 +135,30 @@ private fun LeagueTableView(rows: List<TableRow>, playerTeam: String, modifier: 
                     "${row.won}",
                     "${row.drawn}",
                     "${row.lost}",
-                    "${row.goalDifference}",
+                    "${row.goalsFor}",
+                    "${row.goalsAgainst}",
                     "${row.points}",
                     header = false,
-                    highlight = row.team == playerTeam,
+                    highlight = row.team == season.playerTeam,
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun SectionTitle(text: String) {
+    Text(text, color = Gold, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+}
+
+@Composable
+private fun ResultLine(home: String, homeGoals: Int, awayGoals: Int, away: String, highlight: Boolean) {
+    val color = if (highlight) Gold else Color.White
+    val weight = if (highlight) FontWeight.Bold else FontWeight.Normal
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(home, color = color, fontWeight = weight, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End, modifier = Modifier.weight(1f))
+        Text("$homeGoals – $awayGoals", color = color, fontWeight = FontWeight.Bold, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.width(56.dp))
+        Text(away, color = color, fontWeight = weight, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
     }
 }
 
@@ -181,7 +170,8 @@ private fun TableLine(
     won: String,
     drawn: String,
     lost: String,
-    gd: String,
+    goalsFor: String,
+    goalsAgainst: String,
     points: String,
     header: Boolean,
     highlight: Boolean,
@@ -193,12 +183,12 @@ private fun TableLine(
     }
     val weight = if (header || highlight) FontWeight.Bold else FontWeight.Normal
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(pos, color = color, fontWeight = weight, fontSize = 13.sp, modifier = Modifier.width(24.dp))
-        Text(team, color = color, fontWeight = weight, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        for (value in listOf(played, won, drawn, lost, gd)) {
-            Text(value, color = color, fontWeight = weight, fontSize = 13.sp, textAlign = TextAlign.End, modifier = Modifier.width(28.dp))
+        Text(pos, color = color, fontWeight = weight, fontSize = 12.sp, modifier = Modifier.width(22.dp))
+        Text(team, color = color, fontWeight = weight, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        for (value in listOf(played, won, drawn, lost, goalsFor, goalsAgainst)) {
+            Text(value, color = color, fontWeight = weight, fontSize = 12.sp, textAlign = TextAlign.End, modifier = Modifier.width(24.dp))
         }
-        Text(points, color = color, fontWeight = FontWeight.Bold, fontSize = 13.sp, textAlign = TextAlign.End, modifier = Modifier.width(34.dp))
+        Text(points, color = color, fontWeight = FontWeight.Bold, fontSize = 12.sp, textAlign = TextAlign.End, modifier = Modifier.width(30.dp))
     }
 }
 

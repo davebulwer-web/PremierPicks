@@ -8,16 +8,29 @@ data class MatchResult(val fixture: Fixture, val homeGoals: Int, val awayGoals: 
  * One league season from the player's point of view. Rounds are completed whole: the
  * player's own match (if they have one that round) plus a simulation of every other fixture.
  */
+data class SeasonSettings(
+    /** Rounds in the season, up to a full home-and-away double round robin (the default, null). */
+    val rounds: Int? = null,
+    val points: PointsRules = PointsRules(),
+    /** Whether each half starts with the card-help preview buzzer. */
+    val cardHelp: Boolean = true,
+)
+
 class Season(
     val teams: List<String>,
     val playerTeam: String,
+    val settings: SeasonSettings = SeasonSettings(),
     results: List<MatchResult> = emptyList(),
 ) {
     init {
         require(playerTeam in teams) { "$playerTeam is not in the league" }
     }
 
-    val fixtures: List<List<Fixture>> = FixtureGenerator.doubleRoundRobin(teams)
+    val fixtures: List<List<Fixture>> = FixtureGenerator.doubleRoundRobin(teams).let { all ->
+        val rounds = settings.rounds ?: all.size
+        require(rounds in 1..all.size) { "Bad season length $rounds" }
+        all.take(rounds)
+    }
 
     private val _results = results.toMutableList()
     val results: List<MatchResult> get() = _results
@@ -40,7 +53,7 @@ class Season(
     val lastRoundResults: List<MatchResult> get() = _results.filter { it.fixture.round == roundsPlayed }
 
     fun table(): List<TableRow> {
-        val table = LeagueTable(teams)
+        val table = LeagueTable(teams, settings.points)
         _results.forEach { table.record(it.fixture, it.homeGoals, it.awayGoals) }
         return table.standings()
     }
@@ -61,7 +74,7 @@ class Season(
             if (fixture == mine) {
                 MatchResult(fixture, playerHomeGoals!!, playerAwayGoals!!)
             } else {
-                val sim = MatchSimulator.simulate(rng)
+                val sim = MatchSimulator.simulate(rng, settings.cardHelp)
                 MatchResult(fixture, sim.home.goals, sim.away.goals)
             }
         }
@@ -74,6 +87,9 @@ class Season(
         appendLine(FORMAT)
         appendLine("player\t$playerTeam")
         appendLine("teams\t${teams.joinToString("\t")}")
+        appendLine("rounds\t${fixtures.size}")
+        appendLine("points\t${settings.points.win}\t${settings.points.draw}\t${settings.points.loss}")
+        appendLine("cardhelp\t${settings.cardHelp}")
         _results.forEach {
             appendLine("result\t${it.fixture.round}\t${it.fixture.home}\t${it.fixture.away}\t${it.homeGoals}\t${it.awayGoals}")
         }
@@ -82,19 +98,26 @@ class Season(
     companion object {
         private const val FORMAT = "premier-picks-season-v1"
 
-        fun new(playerTeam: String, teams: List<String> = DEFAULT_TEAMS) = Season(teams, playerTeam)
+        fun new(playerTeam: String, teams: List<String> = DEFAULT_TEAMS, settings: SeasonSettings = SeasonSettings()) =
+            Season(teams, playerTeam, settings)
 
         fun decode(text: String): Season {
             val lines = text.lines().filter { it.isNotBlank() }
             require(lines.firstOrNull() == FORMAT) { "Not a season save" }
             var player: String? = null
             var teams: List<String>? = null
+            var rounds: Int? = null
+            var points = PointsRules()
+            var cardHelp = true
             val results = mutableListOf<MatchResult>()
             for (line in lines.drop(1)) {
                 val parts = line.split("\t")
                 when (parts[0]) {
                     "player" -> player = parts[1]
                     "teams" -> teams = parts.drop(1)
+                    "rounds" -> rounds = parts[1].toInt()
+                    "points" -> points = PointsRules(parts[1].toInt(), parts[2].toInt(), parts[3].toInt())
+                    "cardhelp" -> cardHelp = parts[1].toBoolean()
                     "result" -> results += MatchResult(
                         Fixture(parts[1].toInt(), parts[2], parts[3]),
                         parts[4].toInt(),
@@ -102,11 +125,10 @@ class Season(
                     )
                 }
             }
-            return Season(
-                requireNotNull(teams) { "Save has no teams" },
-                requireNotNull(player) { "Save has no player team" },
-                results,
-            )
+            val league = requireNotNull(teams) { "Save has no teams" }
+            // Saves from before season settings existed played a full double round robin.
+            val settings = SeasonSettings(rounds ?: FixtureGenerator.doubleRoundRobin(league).size, points, cardHelp)
+            return Season(league, requireNotNull(player) { "Save has no player team" }, settings, results)
         }
     }
 }

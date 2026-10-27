@@ -69,9 +69,7 @@ fun CardFaceArt(type: CardType, half: Int, modifier: Modifier = Modifier) {
             CardType.PENALTY -> drawPenalty()
             CardType.FOUL -> drawInjury()
             CardType.YELLOW -> drawBooking(Color(0xFFFFE135))
-            CardType.RED -> drawBooking(Color(0xFFE02020))
             CardType.SUBSTITUTE -> drawSubstitute()
-            CardType.HINT -> drawHint()
             CardType.WHISTLE -> Unit
         }
     }
@@ -214,16 +212,6 @@ private fun DrawScope.drawSubstitute() {
     drawPath(shirt, Color.White)
     drawArrow(Offset(w * 0.6f, h * 0.38f), Offset(w * 0.36f, h * 0.56f), Color(0xFF1F3FD0))
     drawArrow(Offset(w * 0.4f, h * 0.6f), Offset(w * 0.64f, h * 0.78f), Color(0xFFE02020))
-}
-
-private fun DrawScope.drawHint() {
-    val w = size.width
-    val h = size.height
-    drawRect(Color(0xFF0E7C86))
-    drawCircle(Color.White, w * 0.24f, Offset(w * 0.44f, h * 0.4f), style = Stroke(w * 0.08f))
-    drawCircle(Color.White.copy(alpha = 0.25f), w * 0.2f, Offset(w * 0.44f, h * 0.4f))
-    drawLine(Color.White, Offset(w * 0.6f, h * 0.53f), Offset(w * 0.82f, h * 0.75f), strokeWidth = w * 0.1f, cap = StrokeCap.Round)
-    drawBall(Offset(w * 0.44f, h * 0.4f), w * 0.1f)
 }
 
 private fun DrawScope.drawOrange() {

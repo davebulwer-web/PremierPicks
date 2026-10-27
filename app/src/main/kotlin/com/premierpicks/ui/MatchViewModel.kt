@@ -3,6 +3,7 @@ package com.premierpicks.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.premierpicks.engine.CardType
+import com.premierpicks.engine.FOUL_PICKS
 import com.premierpicks.engine.MatchEvent
 import com.premierpicks.engine.MatchState
 import com.premierpicks.engine.Phase
@@ -23,9 +24,19 @@ data class MatchUiState(
     val homeName: String,
     val awayName: String,
     val isHumanTurn: Boolean,
+    val cardHelp: Boolean,
+    /** Cards the player is being shown by card help right now. */
+    val previewShown: Set<Int> = emptySet(),
+    /** Card help is over for this half and play is about to begin. */
+    val previewDone: Boolean = false,
+    /** When the player's penalty hunt runs out, in [System.currentTimeMillis] terms. */
+    val penaltyDeadline: Long? = null,
     val banner: Banner? = null,
 ) {
     fun name(side: Side) = if (side == Side.HOME) homeName else awayName
+
+    /** Face-down cards that are showing their face for the moment: previews and penalty hunts. */
+    val peeking: Set<Int> get() = previewShown + match.penaltyPeeks
 }
 
 class MatchViewModel : ViewModel() {
@@ -34,37 +45,75 @@ class MatchViewModel : ViewModel() {
     private var awayName = "Away"
     private var bannerCount = 0L
     private var computerJob: Job? = null
+    private var penaltyJob: Job? = null
 
-    private val _ui = MutableStateFlow(snapshot(banner = null))
+    private val _ui = MutableStateFlow(snapshot())
     val ui: StateFlow<MatchUiState> = _ui.asStateFlow()
 
-    fun chooseBudget(picks: Int) {
-        if (!match.isHumanTurn || match.state.phase != Phase.AWAITING_BUDGET) return
-        match.chooseBudget(picks)
-        publish(emptyList())
+    /** Starts a fresh match. */
+    fun start(humanSide: Side, homeName: String, awayName: String, cardHelp: Boolean) {
+        computerJob?.cancel()
+        penaltyJob?.cancel()
+        this.homeName = homeName
+        this.awayName = awayName
+        match = SoloMatch(humanSide, cardHelp)
+        _ui.value = snapshot()
+        if (!cardHelp) skipPreview()
+    }
+
+    /** The player stopped the card-help buzzer on [count]: show them that many cards for a moment. */
+    fun stopBuzzer(count: Int) {
+        if (!match.isPreview || _ui.value.previewDone) return
+        val shown = match.preview(count).toSet()
+        _ui.value = snapshot().copy(previewShown = shown, previewDone = true)
+        viewModelScope.launch {
+            delay(PREVIEW_MS)
+            match.beginPlay()
+            publish(emptyList())
+            runComputer()
+        }
     }
 
     fun flip(index: Int) {
-        if (!match.isHumanTurn || match.state.phase != Phase.FLIPPING) return
-        publish(match.flip(index))
-        runComputer()
+        val state = match.state
+        when {
+            match.isHumanPenalty -> {
+                publish(match.penaltyPeek(index))
+                runComputer()
+            }
+            match.isHumanTurn && state.phase == Phase.PICKING -> {
+                publish(match.flip(index))
+                if (match.isHumanPenalty) startPenaltyClock()
+                runComputer()
+            }
+        }
     }
 
     fun startSecondHalf() {
         if (!match.isHalfTime) return
         match.startSecondHalf()
+        _ui.value = snapshot()
+        if (!match.cardHelp) skipPreview()
+    }
+
+    private fun skipPreview() {
+        match.preview(0)
+        match.beginPlay()
         publish(emptyList())
         runComputer()
     }
 
-    /** Starts a fresh match; the computer moves straight away if it kicks off. */
-    fun start(humanSide: Side, homeName: String, awayName: String) {
-        computerJob?.cancel()
-        this.homeName = homeName
-        this.awayName = awayName
-        match = SoloMatch(humanSide)
-        _ui.value = snapshot(banner = null)
-        runComputer()
+    private fun startPenaltyClock() {
+        penaltyJob?.cancel()
+        val deadline = System.currentTimeMillis() + PENALTY_MS
+        _ui.value = _ui.value.copy(penaltyDeadline = deadline)
+        penaltyJob = viewModelScope.launch {
+            delay(PENALTY_MS)
+            if (match.isHumanPenalty) {
+                publish(match.penaltyTimeUp())
+                runComputer()
+            }
+        }
     }
 
     /** Plays the computer's moves with pauses so the player can follow each one. */
@@ -72,7 +121,7 @@ class MatchViewModel : ViewModel() {
         if (computerJob?.isActive == true) return
         computerJob = viewModelScope.launch {
             while (match.isComputerTurn) {
-                delay(if (match.state.phase == Phase.AWAITING_BUDGET) THINK_MS else FLIP_MS)
+                delay(if (match.state.phase == Phase.PENALTY) PENALTY_PEEK_MS else FLIP_MS)
                 publish(match.computerStep())
             }
         }
@@ -80,7 +129,12 @@ class MatchViewModel : ViewModel() {
 
     private fun publish(events: List<MatchEvent>) {
         val banner = bannerFor(events)
-        _ui.value = snapshot(banner ?: _ui.value.banner)
+        val keepDeadline = if (match.isHumanPenalty) _ui.value.penaltyDeadline else null
+        _ui.value = snapshot().copy(
+            banner = banner ?: _ui.value.banner,
+            penaltyDeadline = keepDeadline,
+            previewDone = match.state.phase != Phase.PREVIEW,
+        )
         if (banner != null) {
             viewModelScope.launch {
                 delay(BANNER_MS)
@@ -89,19 +143,21 @@ class MatchViewModel : ViewModel() {
         }
     }
 
-    private fun snapshot(banner: Banner?) = MatchUiState(
+    private fun snapshot() = MatchUiState(
         match = match.state,
         humanSide = match.humanSide,
         homeName = homeName,
         awayName = awayName,
         isHumanTurn = match.isHumanTurn,
-        banner = banner,
+        cardHelp = match.cardHelp,
     )
 
     /** Picks the most important thing that just happened to show as a banner. */
     private fun bannerFor(events: List<MatchEvent>): Banner? {
         val event = events
             .filterNot { it is MatchEvent.TurnChanged || it is MatchEvent.HalfTime || it is MatchEvent.FullTime }
+            // The player needs a clear view of the board to hunt for their penalty.
+            .filterNot { it is MatchEvent.PenaltyAwarded && it.side == match.humanSide }
             .maxByOrNull { priority(it) } ?: return null
         val id = ++bannerCount
         return when (event) {
@@ -110,41 +166,33 @@ class MatchViewModel : ViewModel() {
                 if (event.fromPenalty) "PENALTY SCORED!" else "GOAL!",
                 if (event.side == match.humanSide) "You score" else "${teamName(event.side)} score",
             )
-            is MatchEvent.PenaltySaved -> Banner(id, "PENALTY SAVED", "The keeper guesses right")
-            is MatchEvent.SentOff -> Banner(id, "SENT OFF!", "${who(event.side)} can now pick at most ${event.newMaxPicks}")
-            is MatchEvent.Booked -> Banner(id, if (event.red) "RED CARD" else "YELLOW CARD", who(event.side))
-            is MatchEvent.Foul -> Banner(
-                id,
-                "INJURY!",
-                if (event.forfeitedPicks == 0) "Turn over" else "${event.forfeitedPicks} picks go to ${who(event.side.opponent)}",
-            )
-            is MatchEvent.Hint -> Banner(id, "HINT!", "Goals are highlighted")
-            is MatchEvent.Substitution -> Banner(id, "SUBSTITUTE!", "Swapped for ${describe(event.replacement)}")
-            is MatchEvent.Miss -> Banner(id, "SAVED!")
+            is MatchEvent.PenaltyAwarded -> Banner(id, "PENALTY!", "${teamName(event.side)} hunt for a goal")
+            is MatchEvent.PenaltyMissed -> Banner(id, "PENALTY MISSED", if (event.side == match.humanSide) "Out of time" else null)
+            is MatchEvent.Foul -> Banner(id, "FOUL!", "${who(event.side.opponent)} get $FOUL_PICKS picks")
+            is MatchEvent.FreeKick -> Banner(id, "FREE KICK!", "${who(event.side)} pick again")
+            is MatchEvent.Substitution -> Banner(id, "SUBSTITUTION", "Swapped for ${describe(event.replacement)}")
+            is MatchEvent.Miss -> Banner(id, COMMENTARY[(id % COMMENTARY.size).toInt()])
             else -> null
         }
     }
 
     private fun priority(event: MatchEvent): Int = when (event) {
-        is MatchEvent.Goal -> 6
-        is MatchEvent.PenaltySaved -> 5
-        is MatchEvent.SentOff -> 4
-        is MatchEvent.Foul -> 3
-        is MatchEvent.Booked -> 2
-        is MatchEvent.Hint -> 1
+        is MatchEvent.Goal -> 5
+        is MatchEvent.PenaltyMissed -> 4
+        is MatchEvent.PenaltyAwarded -> 3
+        is MatchEvent.Foul -> 2
         // Above the card it turned into, unless that card did something bigger.
         is MatchEvent.Substitution -> 1
+        is MatchEvent.FreeKick -> 1
         else -> 0
     }
 
     private fun describe(type: CardType) = when (type) {
         CardType.GOAL -> "a goal"
         CardType.PENALTY -> "a penalty"
-        CardType.HINT -> "a hint"
-        CardType.MISS -> "a save"
-        CardType.FOUL -> "an injury"
-        CardType.YELLOW -> "a yellow card"
-        CardType.RED -> "a red card"
+        CardType.MISS -> "a near miss"
+        CardType.FOUL -> "a foul"
+        CardType.YELLOW -> "a free kick"
         CardType.SUBSTITUTE, CardType.WHISTLE -> "another card"
     }
 
@@ -152,9 +200,12 @@ class MatchViewModel : ViewModel() {
 
     private fun teamName(side: Side) = if (side == Side.HOME) homeName else awayName
 
-    private companion object {
-        const val THINK_MS = 900L
+    companion object {
+        const val PREVIEW_MS = 3_000L
+        const val PENALTY_MS = 3_000L
         const val FLIP_MS = 800L
-        const val BANNER_MS = 1_400L
+        const val PENALTY_PEEK_MS = 350L
+        const val BANNER_MS = 1_200L
+        private val COMMENTARY = listOf("Just wide!", "Saved!", "Off the post!", "Over the bar!")
     }
 }
