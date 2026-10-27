@@ -8,8 +8,9 @@ card-flipping football game wrapped in a 21-team league season.
 - **Kotlin** throughout.
 - **`engine/`**: the game rules as a pure Kotlin/JVM module with no Android
   dependencies, so they are fast to unit test and reusable from the app.
-- **`app/`**: the Android app, built with Jetpack Compose. For now it plays a single
-  match against the computer.
+- **`app/`**: the Android app, built with Jetpack Compose. Pick a team and play a
+  42-round season against the computer; the rest of the league's fixtures are simulated.
+  The season is saved after every round (a match in progress is not).
 
 ## Building
 
