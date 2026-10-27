@@ -1,8 +1,10 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    kotlin("jvm")
+    kotlin("jvm") version "2.1.21"
 }
+
+group = "com.premierpicks"
 
 // Target Java 17 bytecode so the engine drops straight into an Android module.
 java {

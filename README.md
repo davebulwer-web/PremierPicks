@@ -8,13 +8,21 @@ card-flipping football game wrapped in a 21-team league season.
 - **Kotlin** throughout.
 - **`engine/`**: the game rules as a pure Kotlin/JVM module with no Android
   dependencies, so they are fast to unit test and reusable from the app.
-- **`app/`** (coming in milestone 2): the Android app, built with Jetpack Compose.
+- **`app/`**: the Android app, built with Jetpack Compose. For now it plays a single
+  match against the computer.
 
-## Running the tests
+## Building
 
 ```
-./gradlew :engine:test
+./gradlew -p engine test      # game rules only, no Android SDK needed
+./gradlew :app:assembleDebug  # the app, needs the Android SDK
 ```
+
+Or open the project in Android Studio and run the `app` configuration.
+
+Every push to a pull request also builds the app on GitHub: open the PR's
+**Checks** tab, choose the *Build* run, and download `premier-picks-debug-apk`
+from its Artifacts section to install on a phone.
 
 ## Rules as implemented
 
